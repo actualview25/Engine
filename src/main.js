@@ -490,4 +490,60 @@ class ActualViewEngine {
         // تحديث OrbitControls
         this.controls?.update();
         
-        // تحدي
+        // تحديث الكاميرا
+        this.cameraController?.update();
+        
+        // تحديث النقاط الساخنة
+        this.hotspotSystem?.updatePositions();
+        
+        // تحديث علامات العمال
+        this.workerMarkers?.render(this.camera);
+        
+        // تحديث النوافير (جسيمات)
+        this.globalFountain?.animate(deltaTime / 1000);
+        
+        // التصيير
+        if (this.effectsManager) {
+            this.effectsManager.render(deltaTime);
+        } else if (this.renderer && this.scene && this.camera) {
+            this.renderer.render(this.scene, this.camera);
+        }
+    }
+    
+    // ============ UTILITY ============
+    getSystemStatus() {
+        return {
+            version: '2.0.0',
+            name: 'Actual View Engine',
+            type: 'Reality Navigation Platform',
+            status: 'running',
+            stats: {
+                nodes: this.nodeSystem?.getNodeCount() || 0,
+                hotspots: this.hotspotSystem?.getCount() || 0,
+                markers: this.workerMarkers?.getWorkerCount() || 0,
+                activeTools: this.toolbar?.getActiveTool() || 'none'
+            }
+        };
+    }
+    
+    dispose() {
+        this.performanceMonitor?.stopMonitoring();
+        this.memoryProfiler?.dispose();
+        this.voiceCommands?.dispose();
+        this.workerMarkers?.dispose();
+        this.hotspotSystem?.dispose();
+        
+        console.log('♻️ Engine disposed');
+    }
+}
+
+// ============ START APPLICATION ============
+window.addEventListener('DOMContentLoaded', () => {
+    window.app = new ActualViewEngine();
+    
+    // للوصول من Console
+    window.getSystemStatus = () => window.app.getSystemStatus();
+    window.engine = window.app;
+    
+    console.log('💡 Available commands: window.getSystemStatus(), window.engine');
+});
