@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="description" content="Actual View Engine - Reality Navigation Platform">
+    <title>Actual View Engine | منصة الملاحة التفاعلية</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/assets/icons/favicon.svg">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="/src/ui/css/style.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <!-- حاوية Three.js -->
+    <div id="container"></div>
+    
+    <!-- حالة الأداة -->
+    <div class="tool-status" id="toolStatus">
+        <i class="fas fa-circle" style="color: #44ff44; font-size: 10px;"></i>
+        <span>🟢 جاهز | وضع: التصفح</span>
+    </div>
+    
+    <!-- شريط الأدوات الرئيسي -->
+    <div class="toolbar" id="toolbar">
+        <div class="toolbar-group">
+            <button id="btnNavigate" class="tool-btn active" title="تصفح">
+                <i class="fas fa-compass"></i>
+                <span>تصفح</span>
+            </button>
+            <button id="btnDistance" class="tool-btn" title="قياس المسافة">
+                <i class="fas fa-ruler-combined"></i>
+                <span>مسافة</span>
+            </button>
+            <button id="btnArea" class="tool-btn" title="قياس المساحة">
+                <i class="fas fa-draw-polygon"></i>
+                <span>مساحة</span>
+            </button>
+            <button id="btnVolume" class="tool-btn" title="قياس الحجم">
+                <i class="fas fa-cube"></i>
+                <span>حجم</span>
+            </button>
+            <button id="btnAngle" class="tool-btn" title="قياس الزاوية">
+                <i class="fas fa-angle-double-up"></i>
+                <span>زاوية</span>
+            </button>
+        </div>
+        
+        <div class="toolbar-divider"></div>
+        
+        <div class="toolbar-group">
+            <button id="btnHotspotInfo" class="tool-btn" title="إضافة معلومات">
+                <i class="fas fa-info-circle"></i>
+                <span>معلومات</span>
+            </button>
+            <button id="btnHotspotScene" class="tool-btn" title="ربط مشهد">
+                <i class="fas fa-link"></i>
+                <span>ربط</span>
+            </button>
+        </div>
+        
+        <div class="toolbar-divider"></div>
+        
+        <div class="toolbar-group">
+            <button id="btnBOQ" class="tool-btn" title="كميات المواد">
+                <i class="fas fa-chart-bar"></i>
+                <span>الكميات</span>
+            </button>
+            <button id="btnCAD" class="tool-btn" title="استيراد CAD">
+                <i class="fas fa-drafting-compass"></i>
+                <span>CAD</span>
+            </button>
+            <button id="btnIFC" class="tool-btn" title="استيراد BIM">
+                <i class="fas fa-building"></i>
+                <span>BIM</span>
+            </button>
+        </div>
+        
+        <div class="toolbar-divider"></div>
+        
+        <div class="toolbar-group">
+            <button id="btnVoice" class="tool-btn" title="الأوامر الصوتية">
+                <i class="fas fa-microphone"></i>
+                <span>صوت</span>
+            </button>
+            <button id="btnSnapshot" class="tool-btn" title="لقطة شاشة">
+                <i class="fas fa-camera"></i>
+                <span>تصوير</span>
+            </button>
+            <button id="btnReport" class="tool-btn" title="تقرير">
+                <i class="fas fa-file-alt"></i>
+                <span>تقرير</span>
+            </button>
+            <button id="btnExport" class="tool-btn" title="تصدير">
+                <i class="fas fa-download"></i>
+                <span>تصدير</span>
+            </button>
+            <button id="btnReset" class="tool-btn" title="إعادة تعيين">
+                <i class="fas fa-undo-alt"></i>
+                <span>إعادة</span>
+            </button>
+        </div>
+    </div>
+    
+    <!-- لوحة الخصائص الجانبية -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h3><i class="fas fa-info-circle"></i> خصائص المشروع</h3>
+            <button id="closeSidebar" class="close-btn"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="sidebar-content" id="sidebarContent">
+            <div class="loading-properties">
+                <div class="spinner"></div>
+                <p>جاري التحميل...</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- لوحة BOQ -->
+    <div class="panel boq-panel" id="boqPanel" style="display: none;">
+        <div class="panel-header">
+            <h3><i class="fas fa-chart-bar"></i> كميات المواد</h3>
+            <button id="closeBOQ" class="close-btn"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="panel-content" id="boqContent">
+            <div class="boq-summary" id="boqSummary"></div>
+            <div class="boq-items" id="boqItems"></div>
+            <div class="boq-total" id="boqTotal"></div>
+            <button id="exportBOQ" class="btn-primary">📊 تصدير التقرير</button>
+        </div>
+    </div>
+    
+    <!-- شريط الحالة السفلي -->
+    <div class="status-bar" id="statusBar">
+        <div class="status-item">
+            <i class="fas fa-map-marker-alt"></i>
+            <span id="nodeCount">0</span> نقطة
+        </div>
+        <div class="status-item">
+            <i class="fas fa-tag"></i>
+            <span id="hotspotCount">0</span> نقطة تفاعل
+        </div>
+        <div class="status-item">
+            <i class="fas fa-chart-line"></i>
+            <span id="fps">60</span> FPS
+        </div>
+        <div class="status-item">
+            <i class="fas fa-microphone" id="voiceStatus"></i>
+        </div>
+    </div>
+    
+    <!-- نافذة منبثقة للإشعارات -->
+    <div class="toast-container" id="toastContainer"></div>
+    
+    <!-- طبقة تحميل -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <p id="loadingMessage">جاري التحميل...</p>
+    </div>
+    
+    <!-- Import Maps -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.128.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.128.0/examples/jsm/",
+                "jspdf": "https://cdn.skypack.dev/jspdf@2.5.1",
+                "xlsx": "https://cdn.skypack.dev/xlsx@0.18.5"
+            }
+        }
+    </script>
+    
+    <!-- التشغيل الرئيسي -->
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>
