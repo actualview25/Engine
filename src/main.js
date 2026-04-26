@@ -1,234 +1,358 @@
 // ============================================
-// ACTUAL VIEW ENGINE v2.0 - ENTRY POINT
+// ACTUAL VIEW ENGINE v2.0 - SIMPLE ENTRY POINT
 // ============================================
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-// ============ CORE SYSTEMS ============
-import { EventBus } from './core/EventBus.js';
-import { NodeSystem } from './core/NodeSystem.js';
-import { SceneGraph } from './core/SceneGraph.js';
-import { GeoReferencing } from './core/GeoReferencing.js';
-import { ProjectBridge } from './core/ProjectBridge.js';
+// ============ CLASSES (مضمنة لتجنب مشاكل الاستيراد) ============
 
-// ============ RENDERING SYSTEMS ============
-import { PanoramaRenderer } from './rendering/PanoramaRenderer.js';
-import { CameraController } from './rendering/CameraController.js';
-import { LightingSystem } from './rendering/LightingSystem.js';
-import { EffectsManager } from './rendering/EffectsManager.js';
+// Event Bus
+class EventBus {
+    constructor() {
+        this.listeners = new Map();
+    }
+    on(event, callback) {
+        if (!this.listeners.has(event)) this.listeners.set(event, []);
+        this.listeners.get(event).push(callback);
+        return () => this.off(event, callback);
+    }
+    emit(event, data) {
+        if (this.listeners.has(event)) {
+            for (const callback of this.listeners.get(event)) callback(data);
+        }
+    }
+    off(event, callback) {
+        if (this.listeners.has(event)) {
+            const filtered = this.listeners.get(event).filter(cb => cb !== callback);
+            if (filtered.length === 0) this.listeners.delete(event);
+            else this.listeners.set(event, filtered);
+        }
+    }
+}
 
-// ============ INTERACTION SYSTEMS ============
-import { RaycasterHandler } from './interaction/RaycasterHandler.js';
-import { NavigationHandler } from './interaction/NavigationHandler.js';
-import { HotspotSystem } from './interaction/HotspotSystem.js';
+// Node System
+class NodeSystem {
+    constructor(eventBus) {
+        this.eventBus = eventBus;
+        this.nodes = new Map();
+        this.currentNodeId = null;
+    }
+    createNode(data) {
+        const id = data.id || `node_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        const node = {
+            id, name: data.name || id, panorama: data.panorama || null,
+            position: data.position || { x: 0, y: 0, z: 0 },
+            rotation: data.rotation || { x: 0, y: 0, z: 0 },
+            links: data.links || [], createdAt: Date.now()
+        };
+        this.nodes.set(id, node);
+        this.eventBus.emit('node:created', node);
+        return id;
+    }
+    getNode(id) { return this.nodes.get(id); }
+    getAllNodes() { return Array.from(this.nodes.values()); }
+    setCurrentNode(id) {
+        if (this.nodes.has(id)) {
+            this.currentNodeId = id;
+            this.eventBus.emit('node:currentChanged', this.nodes.get(id));
+            return true;
+        }
+        return false;
+    }
+    getCurrentNode() { return this.nodes.get(this.currentNodeId); }
+    getNodeCount() { return this.nodes.size; }
+}
 
-// ============ TOOLS ============
-import { DistanceTool } from './tools/measurement/DistanceTool.js';
-import { AreaTool } from './tools/measurement/AreaTool.js';
-import { VolumeTool } from './tools/measurement/VolumeTool.js';
-import { AngleTool } from './tools/measurement/AngleTool.js';
-import { PathTools } from './tools/paths/PathTools.js';
-import { ExportTools } from './tools/export/ExportTools.js';
+// Panorama Renderer
+class PanoramaRenderer {
+    constructor(scene, eventBus) {
+        this.scene = scene;
+        this.eventBus = eventBus;
+        this.currentSphere = null;
+    }
+    async loadPanorama(url) {
+        return new Promise((resolve, reject) => {
+            const loader = new THREE.TextureLoader();
+            loader.load(url, (texture) => {
+                if (this.currentSphere) {
+                    this.currentSphere.material.map = texture;
+                    this.currentSphere.material.needsUpdate = true;
+                } else {
+                    const geometry = new THREE.SphereGeometry(500, 64, 64);
+                    const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide });
+                    this.currentSphere = new THREE.Mesh(geometry, material);
+                    this.scene.add(this.currentSphere);
+                }
+                this.eventBus.emit('panorama:loaded', { url });
+                resolve(texture);
+            }, undefined, reject);
+        });
+    }
+}
 
-// ============ UI PANELS ============
-import { Toolbar } from './ui/panels/Toolbar.js';
-import { PropertiesPanel } from './ui/panels/PropertiesPanel.js';
-import { SceneExplorer } from './ui/panels/SceneExplorer.js';
-import { BOQPanel } from './ui/panels/BOQPanel.js';
-import { SettingsPanel } from './ui/panels/SettingsPanel.js';
-import { UIManager } from './ui/UIManager.js';
+// Camera Controller
+class CameraController {
+    constructor(camera, controls, eventBus) {
+        this.camera = camera;
+        this.controls = controls;
+        this.eventBus = eventBus;
+        this.isTransitioning = false;
+    }
+    startTransition(targetPosition, targetRotation, duration = 0.6) {
+        if (this.isTransitioning) return;
+        this.isTransitioning = true;
+        const startPos = this.camera.position.clone();
+        const startRot = { x: this.camera.rotation.x, y: this.camera.rotation.y };
+        const startTime = performance.now();
+        const animate = (now) => {
+            const elapsed = (now - startTime) / 1000;
+            const t = Math.min(1, elapsed / duration);
+            const ease = 1 - Math.pow(1 - t, 3);
+            this.camera.position.lerpVectors(startPos, targetPosition, ease);
+            this.camera.rotation.x = startRot.x + (targetRotation.x - startRot.x) * ease;
+            this.camera.rotation.y = startRot.y + (targetRotation.y - startRot.y) * ease;
+            if (t < 1) requestAnimationFrame(animate);
+            else { this.isTransitioning = false; this.eventBus.emit('camera:transitionEnd'); }
+        };
+        requestAnimationFrame(animate);
+    }
+    update() { this.controls?.update(); }
+}
 
-// ============ DIALOGS ============
-import { CalibrationDialog } from './ui/dialogs/CalibrationDialog.js';
-import { ExportDialog } from './ui/dialogs/ExportDialog.js';
-import { HotspotDialog } from './ui/dialogs/HotspotDialog.js';
+// Lighting System
+class LightingSystem {
+    constructor(scene) {
+        this.scene = scene;
+    }
+    setup() {
+        const ambientLight = new THREE.AmbientLight(0x404060, 0.6);
+        this.scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xfff5e6, 1.2);
+        dirLight.position.set(10, 20, 5);
+        dirLight.castShadow = true;
+        this.scene.add(dirLight);
+        const fillLight = new THREE.DirectionalLight(0x88aaff, 0.4);
+        fillLight.position.set(-5, 10, -10);
+        this.scene.add(fillLight);
+        const backLight = new THREE.PointLight(0x4466aa, 0.3);
+        backLight.position.set(0, 5, -15);
+        this.scene.add(backLight);
+    }
+}
 
-// ============ PLAYER MODES ============
-import { WorkerMode } from './player/WorkerMode.js';
-import { ForemanMode } from './player/ForemanMode.js';
-import { MobileWorkerMode } from './player/MobileWorkerMode.js';
-import { WorkerMarkers } from './player/WorkerMarkers.js';
+// Raycaster Handler
+class RaycasterHandler {
+    constructor(camera, domElement, eventBus) {
+        this.camera = camera;
+        this.domElement = domElement;
+        this.eventBus = eventBus;
+        this.raycaster = new THREE.Raycaster();
+        this.sphereMesh = null;
+        this.clickHandler = null;
+        this.domElement.addEventListener('click', (e) => this.onClick(e));
+    }
+    setSphereMesh(mesh) { this.sphereMesh = mesh; }
+    setClickHandler(handler) { this.clickHandler = handler; }
+    onClick(event) {
+        if (!this.sphereMesh) return;
+        const rect = this.domElement.getBoundingClientRect();
+        const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        this.raycaster.setFromCamera(new THREE.Vector2(x, y), this.camera);
+        const intersects = this.raycaster.intersectObject(this.sphereMesh);
+        if (intersects.length > 0) {
+            const point = intersects[0].point.clone().normalize().multiplyScalar(502);
+            if (this.clickHandler) this.clickHandler(point);
+            this.eventBus.emit('raycaster:click', { point });
+        }
+    }
+}
 
-// ============ VOICE COMMANDS ============
-import { VoiceCommands } from './voice/VoiceCommands.js';
-import { SpeechRecognizer } from './voice/SpeechRecognizer.js';
-import { TextToSpeech } from './voice/TextToSpeech.js';
+// Navigation Handler
+class NavigationHandler {
+    constructor(nodeSystem, panoramaRenderer, cameraController, eventBus) {
+        this.nodeSystem = nodeSystem;
+        this.panoramaRenderer = panoramaRenderer;
+        this.cameraController = cameraController;
+        this.eventBus = eventBus;
+        this.currentNode = null;
+        this.isTransitioning = false;
+        this.eventBus.on('node:currentChanged', (node) => { this.currentNode = node; });
+    }
+    handleNavigationClick(clickPoint) {
+        if (this.isTransitioning || !this.currentNode) return false;
+        if (this.currentNode.links && this.currentNode.links.length > 0) {
+            this.navigateToNode(this.currentNode.links[0].targetId);
+            return true;
+        }
+        return false;
+    }
+    async navigateToNode(targetId) {
+        const targetNode = this.nodeSystem.getNode(targetId);
+        if (!targetNode) return false;
+        this.isTransitioning = true;
+        this.eventBus.emit('navigation:start', { from: this.currentNode, to: targetNode });
+        try {
+            if (targetNode.panorama) await this.panoramaRenderer.loadPanorama(targetNode.panorama);
+            this.nodeSystem.setCurrentNode(targetId);
+            this.isTransitioning = false;
+            this.eventBus.emit('navigation:complete', { node: targetNode });
+            return true;
+        } catch (error) {
+            this.isTransitioning = false;
+            console.error('Navigation failed:', error);
+            return false;
+        }
+    }
+    setCurrentNode(nodeId) { this.nodeSystem.setCurrentNode(nodeId); }
+}
 
-// ============ DEBUG ============
-import { DebugLayer } from './debug/DebugLayer.js';
-import { PerformanceMonitor } from './debug/PerformanceMonitor.js';
-import { MemoryProfiler } from './debug/MemoryProfiler.js';
+// Hotspot System
+class HotspotSystem {
+    constructor(scene, camera, eventBus, nodeSystem) {
+        this.scene = scene;
+        this.camera = camera;
+        this.eventBus = eventBus;
+        this.nodeSystem = nodeSystem;
+        this.hotspots = [];
+    }
+    addHotspot(type, position, data) {
+        const id = `hotspot_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        this.hotspots.push({ id, type, position, data, createdAt: Date.now() });
+        this.eventBus.emit('hotspot:added', { id, type, position });
+        return id;
+    }
+    updatePositions() {}
+    getCount() { return this.hotspots.length; }
+    dispose() { this.hotspots = []; }
+}
 
-// ============ ARCHITECTURE MODULES ============
-import { Wall } from './modules/Architecture/Wall.js';
-import { Door } from './modules/Architecture/Door.js';
-import { Window } from './modules/Architecture/Window.js';
-import { Floor } from './modules/Architecture/Floor.js';
+// Toolbar
+class Toolbar {
+    constructor(engine) {
+        this.engine = engine;
+        this.activeTool = 'navigate';
+        this.createToolbar();
+    }
+    createToolbar() {
+        this.element = document.createElement('div');
+        this.element.style.cssText = `
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(30,30,46,0.95); backdrop-filter: blur(10px);
+            border-radius: 50px; padding: 8px 16px; display: flex; gap: 8px;
+            z-index: 1000; border: 1px solid rgba(255,170,68,0.3);
+        `;
+        const tools = [
+            { id: 'navigate', icon: '🗺️', name: 'تصفح' },
+            { id: 'distance', icon: '📏', name: 'مسافة' },
+            { id: 'area', icon: '📐', name: 'مساحة' },
+            { id: 'hotspot', icon: '📍', name: 'نقطة' }
+        ];
+        tools.forEach(tool => {
+            const btn = document.createElement('button');
+            btn.innerHTML = `${tool.icon} ${tool.name}`;
+            btn.style.cssText = `
+                background: ${this.activeTool === tool.id ? '#ffaa44' : 'transparent'};
+                border: none; border-radius: 40px; padding: 8px 16px;
+                color: ${this.activeTool === tool.id ? '#1e1e2e' : '#ccc'};
+                cursor: pointer; font-family: monospace;
+            `;
+            btn.onclick = () => this.activateTool(tool.id);
+            this.element.appendChild(btn);
+        });
+        document.body.appendChild(this.element);
+    }
+    activateTool(toolId) {
+        this.activeTool = toolId;
+        document.querySelectorAll('#toolbar button').forEach(btn => btn.style.background = 'transparent');
+        if (this.element.children[toolId]) this.element.children[toolId].style.background = '#ffaa44';
+        const statusEl = document.getElementById('statusMessage');
+        if (statusEl) {
+            const names = { navigate: '🟢 وضع التصفح', distance: '📏 قياس المسافة', area: '📐 قياس المساحة', hotspot: '📍 إضافة نقطة' };
+            statusEl.innerHTML = names[toolId] || '🟢 جاهز';
+        }
+    }
+    getActiveTool() { return this.activeTool; }
+    show() { if (this.element) this.element.style.display = 'flex'; }
+}
 
-// ============ CONCRETE MODULES ============
-import { Column } from './modules/Concrete/Column.js';
-import { Beam } from './modules/Concrete/Beam.js';
-import { Slab } from './modules/Concrete/Slab.js';
+// WorkerMarkers (مبسط)
+class WorkerMarkers {
+    constructor(scene) {
+        this.scene = scene;
+        this.markers = [];
+    }
+    render(camera) {}
+    getWorkerCount() { return this.markers.length; }
+    dispose() { this.markers.forEach(m => this.scene.remove(m)); this.markers = []; }
+}
 
-// ============ MEP MODULES ============
-import { ElectricalCircuit } from './modules/MEP/Electrical.js';
-import { PlumbingSystem } from './modules/MEP/Plumbing.js';
-import { HVACSystem } from './modules/MEP/HVAC.js';
-
-// ============ GLOBAL SYSTEMS (بعد التعديل) ============
-// Architecture Global
-import { GlobalFloor } from './modules/Architecture/global/GlobalFloor.js';
-import { GlobalWall } from './modules/Architecture/global/GlobalWall.js';
-
-// Concrete Global
-import { GlobalBeam } from './modules/Concrete/global/GlobalBeam.js';
-import { GlobalColumn } from './modules/Concrete/global/GlobalColumn.js';
-import { GlobalSlab } from './modules/Concrete/global/GlobalSlab.js';
-
-// MEP Global
-import { GlobalElectrical } from './modules/MEP/global/GlobalElectrical.js';
-import { GlobalHVAC } from './modules/MEP/global/GlobalHVAC.js';
-import { GlobalPlumbing } from './modules/MEP/global/GlobalPumbing.js';
-
-// Glass Global
-import { GlobalGlass } from './modules/Glass/global/GlobalGlass.js';
-import { GlobalSkylight } from './modules/Glass/global/GlobalSkylight.js';
-import { GlobalCurtainWall } from './modules/Glass/global/GlobalCurtainWall.js';
-
-// Landscaping Global
-import { GlobalFountain } from './modules/Landscaping/global/GlobalFountain.js';
-import { GlobalGardenPath } from './modules/Landscaping/global/GlobalGardenPath.js';
-import { GlobalPlant } from './modules/Landscaping/global/GlobalPlant.js';
-import { GlobalTree } from './modules/Landscaping/global/GlobalTree.js';
-
-// Stone & Brick Global
-import { GlobalStone } from './modules/StoneBrick/global/GlobalStone.js';
-import { GlobalBrick } from './modules/StoneBrick/global/GlobalBrick.js';
-import { GlobalMarble } from './modules/StoneBrick/global/GlobalMarble.js';
-import { GlobalCladding } from './modules/StoneBrick/global/GlobalCladding.js';
-import { GlobalPavement } from './modules/StoneBrick/global/GlobalPavement.js';
-
-// BOQ Global
-import { GlobalBOQCalculator } from './modules/BOQ/global/GlobalBOQCalculator.js';
-import { GlobalReporter } from './modules/BOQ/global/GlobalReporter.js';
-import { GlobalEarthworksBOQ } from './modules/BOQ/global/GlobalEarthworksBOQ.js';
-
-// ============ LOADING SYSTEMS ============
-import { IntegratedLoader } from './loading/IntegratedLoader.js';
-import { LazySceneLoader } from './loading/LazySceneLoader.js';
-import { LoadingStrategy } from './loading/LoadingStrategy.js';
-import { PriorityQueue } from './loading/PriorityQueue.js';
-import { SegmentedSceneLoader } from './loading/SegmentedScenelLoader.js';
-import { TileLODManager } from './loading/TileLODManager.js';
-
-// ============ CAD & UTILS ============
-import { CADImporter } from './cad/CADImporter.js';
-import { CalibrationWizard } from './cad/CalibrationWizard.js';
-import { SVGImporter } from './cad/SVGImporter.js';
-import { MaterialLibrary } from './material/MaterialLibrary.js';
-import { ColorUtils, FileUtils, GeometryUtils, MathUtils, Validators } from './utils/index.js';
+// GlobalFountain (مبسط للرسوم المتحركة)
+class GlobalFountain {
+    constructor(eventBus) { this.eventBus = eventBus; this.particles = []; }
+    animate(deltaTime) {}
+}
 
 // ============ MAIN ENGINE CLASS ============
 class ActualViewEngine {
     constructor() {
         console.log('%c═══════════════════════════════════════', 'color: #ffaa44');
         console.log('%c🏗️ ACTUAL VIEW ENGINE v2.0', 'color: #ffaa44; font-size: 20px; font-weight: bold');
-        console.log('%c📐 Reality Navigation Platform', 'color: #44aaff; font-size: 14px');
         console.log('%c═══════════════════════════════════════', 'color: #ffaa44');
         
-        // ============ CORE ============
-        this.initCore();
+        // Core
+        this.eventBus = new EventBus();
+        this.nodeSystem = new NodeSystem(this.eventBus);
         
-        // ============ THREE.JS ============
+        // Three.js
         this.initThree();
         
-        // ============ RENDERING ============
-        this.initRendering();
+        // Lighting
+        this.lightingSystem = new LightingSystem(this.scene);
+        this.lightingSystem.setup();
         
-        // ============ INTERACTION ============
-        this.initInteraction();
+        // Rendering
+        this.panoramaRenderer = new PanoramaRenderer(this.scene, this.eventBus);
+        this.cameraController = new CameraController(this.camera, this.controls, this.eventBus);
         
-        // ============ TOOLS ============
-        this.initTools();
+        // Interaction
+        this.raycasterHandler = new RaycasterHandler(this.camera, this.renderer.domElement, this.eventBus);
+        this.navigationHandler = new NavigationHandler(this.nodeSystem, this.panoramaRenderer, this.cameraController, this.eventBus);
+        this.hotspotSystem = new HotspotSystem(this.scene, this.camera, this.eventBus, this.nodeSystem);
         
-        // ============ UI ============
-        this.initUI();
+        // UI
+        this.toolbar = new Toolbar(this);
+        this.workerMarkers = new WorkerMarkers(this.scene);
         
-        // ============ PLAYER MODES ============
-        this.initPlayerModes();
+        // Global
+        this.globalFountain = new GlobalFountain(this.eventBus);
         
-        // ============ VOICE ============
-        this.initVoice();
+        // Setup
+        this.setupSphere();
+        this.createDefaultNode();
         
-        // ============ LOADING ============
-        this.initLoading();
-        
-        // ============ CAD ============
-        this.initCAD();
-        
-        // ============ MATERIALS ============
-        this.initMaterials();
-        
-        // ============ GLOBAL SYSTEMS ============
-        this.initGlobalSystems();
-        
-        // ============ DEBUG ============
-        this.initDebug();
-        
-        // ============ START ============
+        // Start
         this.start();
         
         console.log('%c✅ ACTUAL VIEW ENGINE جاهز', 'color: #44ff44; font-size: 16px');
     }
     
-    // ============ CORE INITIALIZATION ============
-    initCore() {
-        // Event Bus - قلب المحرك
-        this.eventBus = new EventBus();
-        
-        // Node System - نظام النقاط
-        this.nodeSystem = new NodeSystem(this.eventBus);
-        
-        // Scene Graph
-        this.sceneGraph = new SceneGraph();
-        
-        // Geo Referencing
-        this.geoReferencing = new GeoReferencing();
-        this.geoReferencing.setCoordinateSystem('utm');
-        
-        // Project Bridge
-        this.projectBridge = new ProjectBridge();
-        
-        console.log('✅ Core systems initialized');
-    }
-    
-    // ============ THREE.JS INITIALIZATION ============
     initThree() {
-        // المشهد
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x050510);
-        this.scene.fog = new THREE.FogExp2(0x050510, 0.003);
+        this.scene.fog = new THREE.FogExp2(0x050510, 0.002);
         
-        // الكاميرا
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
         this.camera.position.set(0, 1.6, 0.1);
         
-        // الريندرر
-        this.renderer = new THREE.WebGLRenderer({ 
-            antialias: true, 
-            powerPreference: "high-performance" 
-        });
+        this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.shadowMap.enabled = true;
-        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 1.2;
         
         document.getElementById('container').appendChild(this.renderer.domElement);
         
-        // Orbit Controls
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
@@ -237,240 +361,88 @@ class ActualViewEngine {
         this.controls.enablePan = false;
         this.controls.target.set(0, 1.6, 0);
         
-        console.log('✅ Three.js initialized');
-    }
-    
-    // ============ RENDERING SYSTEMS ============
-    initRendering() {
-        // Panorama Renderer
-        this.panoramaRenderer = new PanoramaRenderer(this.scene, this.eventBus);
-        
-        // Camera Controller
-        this.cameraController = new CameraController(this.camera, this.controls, this.eventBus);
-        
-        // Lighting System
-        this.lightingSystem = new LightingSystem(this.scene);
-        this.lightingSystem.setup();
-        
-        // Effects Manager
-        this.effectsManager = new EffectsManager(this.renderer, this.scene, this.camera);
-        this.effectsManager.initialize();
-        this.effectsManager.applyPreset('default');
-        
-        // إضافة شبكة مرجعية
-        this.addReferenceGrid();
-        
-        console.log('✅ Rendering systems initialized');
-    }
-    
-    addReferenceGrid() {
+        // Helpers
         const gridHelper = new THREE.GridHelper(100, 20, 0x44aaff, 0x335588);
         gridHelper.position.y = -0.01;
         this.scene.add(gridHelper);
         
-        const axesHelper = new THREE.AxesHelper(15);
+        const axesHelper = new THREE.AxesHelper(10);
         this.scene.add(axesHelper);
+        
+        console.log('✅ Three.js initialized');
     }
     
-    // ============ INTERACTION SYSTEMS ============
-    initInteraction() {
-        // Raycaster Handler
-        this.raycasterHandler = new RaycasterHandler(this.camera, this.renderer.domElement, this.eventBus);
+    setupSphere() {
+        // إنشاء كرة بانورامية باللون الأزرق الداكن
+        const geometry = new THREE.SphereGeometry(500, 64, 64);
+        const material = new THREE.MeshBasicMaterial({ color: 0x1a2a4a, side: THREE.BackSide });
+        this.sphereMesh = new THREE.Mesh(geometry, material);
+        this.scene.add(this.sphereMesh);
+        this.raycasterHandler.setSphereMesh(this.sphereMesh);
         
-        // Navigation Handler
-        this.navigationHandler = new NavigationHandler(
-            this.nodeSystem, 
-            this.panoramaRenderer, 
-            this.cameraController, 
-            this.eventBus
-        );
+        // إضافة نقاط بيضاء للزينة
+        const pointsMat = new THREE.PointsMaterial({ color: 0x88aaff, size: 0.3 });
+        const pointsGeo = new THREE.BufferGeometry();
+        const positions = [];
+        for (let i = 0; i < 300; i++) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            positions.push(500 * Math.sin(phi) * Math.cos(theta));
+            positions.push(500 * Math.sin(phi) * Math.sin(theta));
+            positions.push(500 * Math.cos(phi));
+        }
+        pointsGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+        this.scene.add(new THREE.Points(pointsGeo, pointsMat));
         
-        // Hotspot System
-        this.hotspotSystem = new HotspotSystem(this.scene, this.camera, this.eventBus, this.nodeSystem);
-        
-        // ربط Raycaster بالنظام
-        this.raycasterHandler.setClickHandler((point, object) => {
-            this.navigationHandler.handleNavigationClick(point, this.camera);
+        // إضافة بعض الكرات الصغيرة الملونة للاختبار
+        const colors = [0xff4444, 0x44ff44, 0x44aaff, 0xffaa44];
+        for (let i = 0; i < 12; i++) {
+            const theta = (i / 12) * Math.PI * 2;
+            const phi = Math.sin(i * 0.5) * 0.5;
+            const x = 500 * Math.cos(theta) * Math.cos(phi);
+            const y = 500 * Math.sin(phi);
+            const z = 500 * Math.sin(theta) * Math.cos(phi);
+            const marker = new THREE.Mesh(
+                new THREE.SphereGeometry(2, 16, 16),
+                new THREE.MeshStandardMaterial({ color: colors[i % colors.length], emissive: colors[i % colors.length], emissiveIntensity: 0.3 })
+            );
+            marker.position.set(x, y, z);
+            this.scene.add(marker);
+        }
+    }
+    
+    createDefaultNode() {
+        const nodeId = this.nodeSystem.createNode({
+            name: 'المشهد الرئيسي',
+            panorama: null,
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0 },
+            links: []
         });
-        
-        console.log('✅ Interaction systems initialized');
+        this.navigationHandler.setCurrentNode(nodeId);
     }
     
-    // ============ TOOLS ============
-    initTools() {
-        this.distanceTool = new DistanceTool(this.scene, this.camera, this.eventBus);
-        this.areaTool = new AreaTool(this.scene, this.camera, this.eventBus);
-        this.volumeTool = new VolumeTool(this.scene, this.camera, this.eventBus);
-        this.angleTool = new AngleTool(this.scene, this.camera, this.eventBus);
-        this.pathTools = new PathTools(this);
-        this.exportTools = new ExportTools(this);
-        
-        console.log('✅ Tools initialized');
-    }
-    
-    // ============ UI ============
-    initUI() {
-        this.toolbar = new Toolbar(this);
-        this.toolbar.show();
-        
-        this.propertiesPanel = new PropertiesPanel(this);
-        this.sceneExplorer = new SceneExplorer(this);
-        this.boqPanel = new BOQPanel(this);
-        this.settingsPanel = new SettingsPanel(this);
-        
-        this.uiManager = new UIManager(this.eventBus);
-        this.uiManager.init();
-        
-        // حوارات
-        this.calibrationDialog = new CalibrationDialog(this.calibrationWizard);
-        this.exportDialog = new ExportDialog((data) => this.handleExport(data));
-        this.hotspotDialog = new HotspotDialog(
-            (data) => this.hotspotSystem.addHotspot(data.type, data.position, data),
-            (id, data) => this.hotspotSystem.updateHotspot(id, data)
-        );
-        
-        console.log('✅ UI initialized');
-    }
-    
-    // ============ PLAYER MODES ============
-    initPlayerModes() {
-        this.workerMode = new WorkerMode(this);
-        this.foremanMode = new ForemanMode(this);
-        this.mobileWorkerMode = new MobileWorkerMode(this);
-        this.workerMarkers = new WorkerMarkers(this.scene);
-        
-        console.log('✅ Player modes initialized');
-    }
-    
-    // ============ VOICE COMMANDS ============
-    initVoice() {
-        this.voiceCommands = new VoiceCommands(this);
-        this.speechRecognizer = new SpeechRecognizer();
-        this.textToSpeech = new TextToSpeech();
-        
-        console.log('✅ Voice systems initialized');
-    }
-    
-    // ============ LOADING SYSTEMS ============
-    initLoading() {
-        this.integratedLoader = new IntegratedLoader(this.sceneGraph, null, this.camera);
-        this.lazySceneLoader = new LazySceneLoader(this.sceneGraph);
-        this.loadingStrategy = new LoadingStrategy(this.sceneGraph);
-        this.priorityQueue = new PriorityQueue();
-        this.segmentedSceneLoader = new SegmentedSceneLoader();
-        this.tileLODManager = new TileLODManager(this.camera);
-        
-        console.log('✅ Loading systems initialized');
-    }
-    
-    // ============ CAD SYSTEMS ============
-    initCAD() {
-        this.cadImporter = new CADImporter(this.geoReferencing);
-        this.calibrationWizard = new CalibrationWizard(this.geoReferencing);
-        this.svgImporter = new SVGImporter();
-        
-        console.log('✅ CAD systems initialized');
-    }
-    
-    // ============ MATERIALS ============
-    initMaterials() {
-        this.materialLibrary = new MaterialLibrary();
-        
-        console.log('✅ Materials initialized');
-    }
-    
-    // ============ GLOBAL SYSTEMS ============
-    initGlobalSystems() {
-        // Architecture
-        this.globalFloor = new GlobalFloor(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalWall = new GlobalWall(this.eventBus, this.nodeSystem, this.geoReferencing);
-        
-        // Concrete
-        this.globalBeam = new GlobalBeam(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalColumn = new GlobalColumn(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalSlab = new GlobalSlab(this.eventBus, this.nodeSystem, this.geoReferencing);
-        
-        // MEP
-        this.globalElectrical = new GlobalElectrical(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalHVAC = new GlobalHVAC(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalPlumbing = new GlobalPlumbing(this.eventBus, this.nodeSystem, this.geoReferencing);
-        
-        // Glass
-        this.globalGlass = new GlobalGlass(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalSkylight = new GlobalSkylight(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalCurtainWall = new GlobalCurtainWall(this.eventBus, this.nodeSystem, this.geoReferencing);
-        
-        // Landscaping
-        this.globalFountain = new GlobalFountain(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalGardenPath = new GlobalGardenPath(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalPlant = new GlobalPlant(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalTree = new GlobalTree(this.eventBus, this.nodeSystem, this.geoReferencing);
-        
-        // Stone & Brick
-        this.globalStone = new GlobalStone(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalBrick = new GlobalBrick(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalMarble = new GlobalMarble(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalCladding = new GlobalCladding(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalPavement = new GlobalPavement(this.eventBus, this.nodeSystem, this.geoReferencing);
-        
-        // BOQ
-        this.globalBOQ = new GlobalBOQCalculator(this.eventBus, this.nodeSystem);
-        this.globalReporter = new GlobalReporter(this.globalBOQ);
-        this.globalEarthworksBOQ = new GlobalEarthworksBOQ();
-        
-        console.log('✅ All Global systems initialized');
-    }
-    
-    // ============ DEBUG ============
-    initDebug() {
-        this.debugLayer = new DebugLayer(this.sceneGraph, null, this.integratedLoader, this.tileLODManager);
-        this.debugLayer.init(this.scene);
-        
-        this.performanceMonitor = new PerformanceMonitor();
-        this.performanceMonitor.startMonitoring();
-        
-        this.memoryProfiler = new MemoryProfiler();
-        
-        console.log('✅ Debug systems initialized');
-    }
-    
-    // ============ START ENGINE ============
     start() {
-        // تحميل بانوراما افتراضية
-        this.loadDefaultPanorama();
-        
-        // بدء الحلقة
         this.animate();
-        
-        // تحديث الحجم عند تغيير النافذة
         window.addEventListener('resize', () => this.onResize());
-        
-        // إغلاق المنصة عند إغلاق الصفحة
-        window.addEventListener('beforeunload', () => this.dispose());
-        
-        // تحديث الوقت
         this.updateTime();
         setInterval(() => this.updateTime(), 1000);
-        
+        this.hideLoading();
         console.log('🚀 Engine started');
     }
     
-    loadDefaultPanorama() {
-        const defaultImage = '/assets/textures/default_panorama.jpg';
-        this.panoramaRenderer.loadPanorama(defaultImage);
-    }
-    
-    handleExport(data) {
-        console.log('Export triggered:', data);
-        // تنفيذ التصدير
-        this.exportTools.exportProject(data);
+    hideLoading() {
+        const overlay = document.getElementById('loadingOverlay');
+        if (overlay) {
+            overlay.style.opacity = '0';
+            setTimeout(() => { overlay.style.display = 'none'; }, 500);
+        }
     }
     
     updateTime() {
         const timeElement = document.getElementById('statusTime');
         if (timeElement) {
-            const now = new Date();
-            timeElement.textContent = now.toLocaleTimeString('ar-EG');
+            timeElement.textContent = new Date().toLocaleTimeString('ar-EG');
         }
     }
     
@@ -478,72 +450,34 @@ class ActualViewEngine {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.effectsManager?.setSize(window.innerWidth, window.innerHeight);
     }
     
     animate() {
         requestAnimationFrame(() => this.animate());
         
-        // تحديث المؤثرات
-        const deltaTime = this.performanceMonitor?.currentFrame?.frameTime || 16;
-        
-        // تحديث OrbitControls
         this.controls?.update();
-        
-        // تحديث الكاميرا
         this.cameraController?.update();
-        
-        // تحديث النقاط الساخنة
         this.hotspotSystem?.updatePositions();
-        
-        // تحديث علامات العمال
         this.workerMarkers?.render(this.camera);
+        this.globalFountain?.animate(16);
         
-        // تحديث النوافير (جسيمات)
-        this.globalFountain?.animate(deltaTime / 1000);
+        // تدوير الكرات الصغيرة
+        const time = Date.now() * 0.002;
+        this.scene.children.forEach(child => {
+            if (child.isMesh && child.geometry.type === 'SphereGeometry' && child !== this.sphereMesh && child.material?.emissiveIntensity) {
+                child.material.emissiveIntensity = 0.3 + Math.sin(time) * 0.2;
+            }
+        });
         
-        // التصيير
-        if (this.effectsManager) {
-            this.effectsManager.render(deltaTime);
-        } else if (this.renderer && this.scene && this.camera) {
+        if (this.renderer && this.scene && this.camera) {
             this.renderer.render(this.scene, this.camera);
         }
-    }
-    
-    // ============ UTILITY ============
-    getSystemStatus() {
-        return {
-            version: '2.0.0',
-            name: 'Actual View Engine',
-            type: 'Reality Navigation Platform',
-            status: 'running',
-            stats: {
-                nodes: this.nodeSystem?.getNodeCount() || 0,
-                hotspots: this.hotspotSystem?.getCount() || 0,
-                markers: this.workerMarkers?.getWorkerCount() || 0,
-                activeTools: this.toolbar?.getActiveTool() || 'none'
-            }
-        };
-    }
-    
-    dispose() {
-        this.performanceMonitor?.stopMonitoring();
-        this.memoryProfiler?.dispose();
-        this.voiceCommands?.dispose();
-        this.workerMarkers?.dispose();
-        this.hotspotSystem?.dispose();
-        
-        console.log('♻️ Engine disposed');
     }
 }
 
 // ============ START APPLICATION ============
 window.addEventListener('DOMContentLoaded', () => {
     window.app = new ActualViewEngine();
-    
-    // للوصول من Console
-    window.getSystemStatus = () => window.app.getSystemStatus();
     window.engine = window.app;
-    
-    console.log('💡 Available commands: window.getSystemStatus(), window.engine');
+    console.log('💡 Available: window.engine.getSystemStatus()');
 });
