@@ -1,146 +1,37 @@
 // ============================================
-// NODE SYSTEM - قلب المحرك
-// نظام النقاط الذي يربط المشاهد والانتقالات
+// NODE SYSTEM - نظام إدارة النقاط والمشاهد
 // ============================================
 
 export class NodeSystem {
     constructor(eventBus) {
         this.eventBus = eventBus;
-        this.nodes = new Map(); // id -> Node
+        this.nodes = new Map();
         this.currentNodeId = null;
-        this.geoReferencing = null;
-        
-        // استماع للأحداث
-        this.setupEventListeners();
-    }
-    
-    setupEventListeners() {
-        this.eventBus.on('node:navigate', (nodeId) => {
-            this.navigateToNode(nodeId);
-        });
-        
-        this.eventBus.on('node:create', (nodeData) => {
-            this.createNode(nodeData);
-        });
-        
-        this.eventBus.on('node:link', ({ fromId, toId, direction }) => {
-            this.addLink(fromId, toId, direction);
-        });
-    }
-    
-    setGeoReferencing(geoRef) {
-        this.geoReferencing = geoRef;
+        this.nodeCounter = 0;
     }
     
     createNode(data) {
+        const id = data.id || `node_${++this.nodeCounter}_${Date.now()}`;
         const node = {
-            id: data.id || this.generateId(),
-            panorama: data.panorama,
+            id: id,
+            name: data.name || `Node ${this.nodeCounter}`,
+            panorama: data.panorama || null,
             position: data.position || { x: 0, y: 0, z: 0 },
             rotation: data.rotation || { x: 0, y: 0, z: 0 },
             links: data.links || [],
             metadata: data.metadata || {},
-            createdAt: new Date().toISOString()
+            createdAt: Date.now(),
+            updatedAt: Date.now()
         };
         
-        this.nodes.set(node.id, node);
-        
+        this.nodes.set(id, node);
         this.eventBus.emit('node:created', node);
         
-        return node.id;
+        return id;
     }
     
-    addLink(fromNodeId, toNodeId, direction = null) {
-        const fromNode = this.nodes.get(fromNodeId);
-        const toNode = this.nodes.get(toNodeId);
-        
-        if (!fromNode || !toNode) {
-            console.error(`Node not found: ${fromNodeId} or ${toNodeId}`);
-            return false;
-        }
-        
-        // حساب المسافة بين النقطتين
-        const distance = this.calculateDistance(fromNode.position, toNode.position);
-        
-        const link = {
-            targetId: toNodeId,
-            direction: direction,
-            distance: distance,
-            createdAt: new Date().toISOString()
-        };
-        
-        // تجنب التكرار
-        const existing = fromNode.links.find(l => l.targetId === toNodeId);
-        if (!existing) {
-            fromNode.links.push(link);
-            
-            this.eventBus.emit('node:linkAdded', { fromId: fromNodeId, toId: toNodeId, link });
-            return true;
-        }
-        
-        return false;
-    }
-    
-    getNode(nodeId) {
-        return this.nodes.get(nodeId);
-    }
-    
-    getCurrentNode() {
-        return this.nodes.get(this.currentNodeId);
-    }
-    
-    setCurrentNode(nodeId) {
-        const node = this.nodes.get(nodeId);
-        if (node) {
-            this.currentNodeId = nodeId;
-            this.eventBus.emit('node:currentChanged', node);
-            return true;
-        }
-        return false;
-    }
-    
-    navigateToNode(nodeId) {
-        const targetNode = this.nodes.get(nodeId);
-        const currentNode = this.getCurrentNode();
-        
-        if (!targetNode) {
-            console.error(`Cannot navigate to ${nodeId}: node not found`);
-            return false;
-        }
-        
-        if (currentNode && currentNode.id === nodeId) {
-            return false; // Already there
-        }
-        
-        this.eventBus.emit('node:navigating', { from: currentNode, to: targetNode });
-        
-        this.currentNodeId = nodeId;
-        
-        this.eventBus.emit('node:navigated', targetNode);
-        
-        return true;
-    }
-    
-    findNearestNode(position, maxDistance = 10) {
-        let nearest = null;
-        let minDistance = maxDistance;
-        
-        for (const [id, node] of this.nodes) {
-            const distance = this.calculateDistance(position, node.position);
-            if (distance < minDistance) {
-                minDistance = distance;
-                nearest = node;
-            }
-        }
-        
-        return nearest;
-    }
-    
-    calculateDistance(pos1, pos2) {
-        const dx = (pos1.x || 0) - (pos2.x || 0);
-        const dy = (pos1.y || 0) - (pos2.y || 0);
-        const dz = (pos1.z || 0) - (pos2.z || 0);
-        return Math.sqrt(dx*dx + dy*dy + dz*dz);
+    getNode(id) {
+        return this.nodes.get(id);
     }
     
     getAllNodes() {
@@ -151,31 +42,116 @@ export class NodeSystem {
         return this.nodes.size;
     }
     
-    generateId() {
-        return `node_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    setCurrentNode(id) {
+        if (this.nodes.has(id)) {
+            this.currentNodeId = id;
+            this.eventBus.emit('node:currentChanged', this.nodes.get(id));
+            return true;
+        }
+        return false;
+    }
+    
+    getCurrentNode() {
+        return this.nodes.get(this.currentNodeId);
+    }
+    
+    updateNode(id, updates) {
+        const node = this.nodes.get(id);
+        if (node) {
+            Object.assign(node, updates);
+            node.updatedAt = Date.now();
+            this.eventBus.emit('node:updated', node);
+            return true;
+        }
+        return false;
+    }
+    
+    deleteNode(id) {
+        if (this.nodes.has(id)) {
+            const node = this.nodes.get(id);
+            this.nodes.delete(id);
+            if (this.currentNodeId === id) {
+                this.currentNodeId = null;
+            }
+            this.eventBus.emit('node:deleted', node);
+            return true;
+        }
+        return false;
+    }
+    
+    addLink(fromId, toId, direction = null) {
+        const fromNode = this.nodes.get(fromId);
+        const toNode = this.nodes.get(toId);
+        
+        if (!fromNode || !toNode) {
+            console.error(`Node not found: ${fromId} or ${toId}`);
+            return false;
+        }
+        
+        const link = {
+            targetId: toId,
+            direction: direction,
+            createdAt: Date.now()
+        };
+        
+        fromNode.links.push(link);
+        fromNode.updatedAt = Date.now();
+        
+        this.eventBus.emit('node:linkAdded', { fromId, toId, direction });
+        return true;
+    }
+    
+    removeLink(fromId, toId) {
+        const fromNode = this.nodes.get(fromId);
+        if (fromNode) {
+            const index = fromNode.links.findIndex(l => l.targetId === toId);
+            if (index !== -1) {
+                fromNode.links.splice(index, 1);
+                fromNode.updatedAt = Date.now();
+                this.eventBus.emit('node:linkRemoved', { fromId, toId });
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    getNodeLinks(nodeId) {
+        const node = this.nodes.get(nodeId);
+        return node ? [...node.links] : [];
     }
     
     exportData() {
         return {
-            nodes: this.getAllNodes(),
+            nodes: Array.from(this.nodes.entries()).map(([id, node]) => ({
+                id,
+                ...node,
+                links: node.links
+            })),
             currentNodeId: this.currentNodeId,
-            exportedAt: new Date().toISOString()
+            exportedAt: Date.now()
         };
     }
     
     importData(data) {
         this.nodes.clear();
-        
-        for (const node of data.nodes) {
-            this.nodes.set(node.id, node);
+        for (const nodeData of data.nodes) {
+            this.nodes.set(nodeData.id, {
+                ...nodeData,
+                createdAt: nodeData.createdAt || Date.now(),
+                updatedAt: Date.now()
+            });
         }
-        
-        if (data.currentNodeId && this.nodes.has(data.currentNodeId)) {
-            this.currentNodeId = data.currentNodeId;
-        }
-        
-        this.eventBus.emit('node:dataImported', { nodeCount: this.nodes.size });
-        
+        this.currentNodeId = data.currentNodeId || null;
+        this.eventBus.emit('node:dataImported', { count: this.nodes.size });
         return true;
     }
+    
+    clear() {
+        this.nodes.clear();
+        this.currentNodeId = null;
+        this.nodeCounter = 0;
+        this.eventBus.emit('node:cleared');
+    }
 }
+
+export default NodeSystem;
