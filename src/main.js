@@ -1,3 +1,4 @@
+
 // ============================================
 // ACTUAL VIEW ENGINE v2.0 - ENTRY POINT
 // ============================================
@@ -60,66 +61,22 @@ import { DebugLayer } from './debug/DebugLayer.js';
 import { PerformanceMonitor } from './debug/PerformanceMonitor.js';
 import { MemoryProfiler } from './debug/MemoryProfiler.js';
 
-// ============ ARCHITECTURE MODULES ============
-import { Wall } from './modules/Architecture/Wall.js';
-import { Door } from './modules/Architecture/Door.js';
-import { Window } from './modules/Architecture/Window.js';
-import { Floor } from './modules/Architecture/Floor.js';
-
-// ============ CONCRETE MODULES ============
-import { Column } from './modules/Concrete/Column.js';
-import { Beam } from './modules/Concrete/Beam.js';
-import { Slab } from './modules/Concrete/Slab.js';
-
-// ============ MEP MODULES ============
-import { ElectricalCircuit } from './modules/MEP/Electrical.js';
-import { PlumbingSystem } from './modules/MEP/Plumbing.js';
-import { HVACSystem } from './modules/MEP/HVAC.js';
-
-// ============ GLOBAL SYSTEMS ============
-// Architecture Global
-import { GlobalFloor } from './modules/Architecture/global/GlobalFloor.js';
-import { GlobalWall } from './modules/Architecture/global/GlobalWall.js';
-
-// Concrete Global
-import { GlobalBeam } from './modules/Concrete/global/GlobalBeam.js';
-import { GlobalColumn } from './modules/Concrete/global/GlobalColumn.js';
-import { GlobalSlab } from './modules/Concrete/global/GlobalSlab.js';
-
-// MEP Global (تصحيح الأسماء)
-import { GlobalElectrical } from './modules/MEP/global/GlobalElectrical.js';
-import { GlobalHVAC } from './modules/MEP/global/GlobalHVAC.js';
-import { GlobalPlumbing } from './modules/MEP/global/GlobalPlumbing.js';  // تم التصحيح
-
-// Glass Global
-import { GlobalGlass } from './modules/Glass/global/GlobalGlass.js';
-import { GlobalSkylight } from './modules/Glass/global/GlobalSkylight.js';
-import { GlobalCurtainWall } from './modules/Glass/global/GlobalCurtainWall.js';
-
-// Landscaping Global
-import { GlobalFountain } from './modules/Landscaping/global/GlobalFountain.js';
-import { GlobalGardenPath } from './modules/Landscaping/global/GlobalGardenPath.js';
-import { GlobalPlant } from './modules/Landscaping/global/GlobalPlant.js';
-import { GlobalTree } from './modules/Landscaping/global/GlobalTree.js';
-
-// Stone & Brick Global
-import { GlobalStone } from './modules/StoneBrick/global/GlobalStone.js';
-import { GlobalBrick } from './modules/StoneBrick/global/GlobalBrick.js';
-import { GlobalMarble } from './modules/StoneBrick/global/GlobalMarble.js';
-import { GlobalCladding } from './modules/StoneBrick/global/GlobalCladding.js';
-import { GlobalPavement } from './modules/StoneBrick/global/GlobalPavement.js';
-
-// BOQ Global
-import { GlobalBOQCalculator } from './modules/BOQ/global/GlobalBOQCalculator.js';
-import { GlobalReporter } from './modules/BOQ/global/GlobalReporter.js';
-import { GlobalEarthworksBOQ } from './modules/BOQ/global/GlobalEarthworksBOQ.js';
+// ============ MODULES (باستخدام الـ Index files) ============
+import * as Architecture from './modules/Architecture/index.js';
+import * as Concrete from './modules/Concrete/index.js';
+import * as MEP from './modules/MEP/index.js';
+import * as Glass from './modules/Glass/index.js';
+import * as Landscaping from './modules/Landscaping/index.js';
+import * as StoneBrick from './modules/StoneBrick/index.js';
+import * as BOQ from './modules/BOQ/index.js';
+import * as Earthworks from './modules/Earthworks/index.js';
 
 // ============ LOADING SYSTEMS ============
 import { IntegratedLoader } from './loading/IntegratedLoader.js';
 import { LazySceneLoader } from './loading/LazySceneLoader.js';
 import { LoadingStrategy } from './loading/LoadingStrategy.js';
 import { PriorityQueue } from './loading/PriorityQueue.js';
-import { SegmentedSceneLoader } from './loading/SegmentedSceneLoader.js';  // تم التصحيح
+import { SegmentedSceneLoader } from './loading/SegmentedSceneLoader.js';
 import { TileLODManager } from './loading/TileLODManager.js';
 
 // ============ CAD & UTILS ============
@@ -148,7 +105,7 @@ class ActualViewEngine {
         this.initLoading();
         this.initCAD();
         this.initMaterials();
-        this.initGlobalSystems();
+        this.initModules();
         this.initDebug();
         this.start();
         
@@ -168,13 +125,24 @@ class ActualViewEngine {
     initThree() {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x050510);
+        this.scene.fog = new THREE.FogExp2(0x050510, 0.003);
+        
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
         this.camera.position.set(0, 1.6, 0.1);
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        
+        this.renderer = new THREE.WebGLRenderer({ 
+            antialias: true, 
+            powerPreference: "high-performance" 
+        });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 1.2;
+        
         document.getElementById('container').appendChild(this.renderer.domElement);
+        
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
@@ -182,25 +150,35 @@ class ActualViewEngine {
         this.controls.zoomSpeed = 1.0;
         this.controls.enablePan = false;
         this.controls.target.set(0, 1.6, 0);
-        console.log('✅ Three.js initialized');
-    }
-    
-    initRendering() {
+        
+        // شبكة مرجعية
+        const gridHelper = new THREE.GridHelper(100, 20, 0x44aaff, 0x335588);
+        gridHelper.position.y = -0.01;
+        this.scene.add(gridHelper);
+       initRendering() {
         this.panoramaRenderer = new PanoramaRenderer(this.scene, this.eventBus);
         this.cameraController = new CameraController(this.camera, this.controls, this.eventBus);
         this.lightingSystem = new LightingSystem(this.scene);
         this.lightingSystem.setup();
         this.effectsManager = new EffectsManager(this.renderer, this.scene, this.camera);
+        if (this.effectsManager.initialize) this.effectsManager.initialize();
         console.log('✅ Rendering systems initialized');
     }
     
     initInteraction() {
         this.raycasterHandler = new RaycasterHandler(this.camera, this.renderer.domElement, this.eventBus);
-        this.navigationHandler = new NavigationHandler(this.nodeSystem, this.panoramaRenderer, this.cameraController, this.eventBus);
+        this.navigationHandler = new NavigationHandler(
+            this.nodeSystem, 
+            this.panoramaRenderer, 
+            this.cameraController, 
+            this.eventBus
+        );
         this.hotspotSystem = new HotspotSystem(this.scene, this.camera, this.eventBus, this.nodeSystem);
+        
         this.raycasterHandler.setClickHandler((point, object) => {
             this.navigationHandler.handleNavigationClick(point, this.camera);
         });
+        
         console.log('✅ Interaction systems initialized');
     }
     
@@ -222,6 +200,8 @@ class ActualViewEngine {
         this.boqPanel = new BOQPanel(this);
         this.settingsPanel = new SettingsPanel(this);
         this.uiManager = new UIManager(this.eventBus);
+        this.uiManager.init();
+        
         this.calibrationDialog = new CalibrationDialog(this.calibrationWizard);
         this.exportDialog = new ExportDialog((data) => this.handleExport(data));
         this.hotspotDialog = new HotspotDialog(
@@ -268,36 +248,24 @@ class ActualViewEngine {
         console.log('✅ Materials initialized');
     }
     
-    initGlobalSystems() {
-        this.globalFloor = new GlobalFloor(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalWall = new GlobalWall(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalBeam = new GlobalBeam(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalColumn = new GlobalColumn(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalSlab = new GlobalSlab(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalElectrical = new GlobalElectrical(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalHVAC = new GlobalHVAC(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalPlumbing = new GlobalPlumbing(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalGlass = new GlobalGlass(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalSkylight = new GlobalSkylight(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalCurtainWall = new GlobalCurtainWall(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalFountain = new GlobalFountain(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalGardenPath = new GlobalGardenPath(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalPlant = new GlobalPlant(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalTree = new GlobalTree(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalStone = new GlobalStone(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalBrick = new GlobalBrick(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalMarble = new GlobalMarble(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalCladding = new GlobalCladding(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalPavement = new GlobalPavement(this.eventBus, this.nodeSystem, this.geoReferencing);
-        this.globalBOQ = new GlobalBOQCalculator(this.eventBus, this.nodeSystem);
-        this.globalReporter = new GlobalReporter(this.globalBOQ);
-        this.globalEarthworksBOQ = new GlobalEarthworksBOQ();
-        console.log('✅ Global systems initialized');
+    initModules() {
+        // تخزين الموديولات في engine للوصول إليها
+        this.modules = {
+            architecture: Architecture,
+            concrete: Concrete,
+            mep: MEP,
+            glass: Glass,
+            landscaping: Landscaping,
+            stoneBrick: StoneBrick,
+            boq: BOQ,
+            earthworks: Earthworks
+        };
+        console.log('✅ Modules loaded');
     }
     
     initDebug() {
         this.debugLayer = new DebugLayer(this.sceneGraph, null, this.integratedLoader, this.tileLODManager);
-        this.debugLayer.init(this.scene);
+        if (this.debugLayer.init) this.debugLayer.init(this.scene);
         this.performanceMonitor = new PerformanceMonitor();
         this.performanceMonitor.startMonitoring();
         this.memoryProfiler = new MemoryProfiler();
@@ -305,11 +273,30 @@ class ActualViewEngine {
     }
     
     start() {
+        this.loadDefaultPanorama();
         this.animate();
         window.addEventListener('resize', () => this.onResize());
         this.updateTime();
         setInterval(() => this.updateTime(), 1000);
+        this.hideLoading();
         console.log('🚀 Engine started');
+    }
+    
+    loadDefaultPanorama() {
+        const defaultImage = '/assets/textures/default_panorama.jpg';
+        this.panoramaRenderer.loadPanorama(defaultImage).catch(() => {
+            console.warn('Default panorama not found, using color');
+        });
+    }
+    
+    hideLoading() {
+        const overlay = document.getElementById('loadingOverlay');
+        if (overlay) {
+            overlay.style.opacity = '0';
+            setTimeout(() => {
+                overlay.style.display = 'none';
+            }, 500);
+        }
     }
     
     updateTime() {
@@ -328,11 +315,12 @@ class ActualViewEngine {
     
     animate() {
         requestAnimationFrame(() => this.animate());
+        
         this.controls?.update();
         this.cameraController?.update();
         this.hotspotSystem?.updatePositions();
         this.workerMarkers?.render(this.camera);
-        this.globalFountain?.animate(16);
+        
         if (this.effectsManager) {
             this.effectsManager.render();
         } else if (this.renderer && this.scene && this.camera) {
@@ -376,4 +364,9 @@ window.addEventListener('DOMContentLoaded', () => {
     window.getSystemStatus = () => window.app.getSystemStatus();
     window.engine = window.app;
     console.log('💡 Available commands: window.getSystemStatus(), window.engine');
-});
+}); 
+        const axesHelper = new THREE.AxesHelper(15);
+        this.scene.add(axesHelper);
+        
+        console.log('✅ Three.js initialized');
+    }
